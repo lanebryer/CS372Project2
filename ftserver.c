@@ -1,3 +1,6 @@
+/*******Lane Bryer - CS 372 Project 2********
+*****************ftserver.c*****************/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -17,6 +20,8 @@ void error(char* msg)
     exit(1);
 }
 
+//Appends an EOT character on to the end of the string so that the
+//client knows when to stop receiving
 char* appendEOT(char* msg)
 {
     char c = 4;
@@ -73,11 +78,13 @@ int acceptConnection(int sockfd)
     {
         error("Error on accept\n");
     }
-    
+    printf("Control connection established\n");
     return newSock;
 }
 
 //sends all data in buffer - taken from beej's networking guide
+//appends an EOT ASCII character to end of string so client knows when to stop
+//receiving
 void sendAll(int sockfd, char* buffer)
 {
     char* newBuf = appendEOT(buffer);
@@ -100,9 +107,12 @@ void sendAll(int sockfd, char* buffer)
 	free(newBuf);
 }
 
+//receives all data from client by receiving until an EOT ASCII character is received, which has been
+//appended on to the end of the message by the client
 char* recvAll(int sockfd)
 {
     char* finalMsg = malloc(sizeof(char) * 1024);
+    memset(finalMsg, 0, sizeof(char) * 1024);
     char* chunk = malloc(sizeof(char) * 1024);
     int bytes_read, totalBytesRead, i;
     i = 1;
@@ -126,6 +136,7 @@ char* recvAll(int sockfd)
 }
 
 //This causes the C server to act as a client and connect to the python client
+//Connection setup taken from beej's guide
 int establishDataConnection(int controlSock)
 {
 	int status;
@@ -135,8 +146,7 @@ int establishDataConnection(int controlSock)
 	char* port;
 	connectionInfo = recvAll(controlSock);	
 	IP_Address = strtok(connectionInfo, "\n");
-	port = strtok(NULL, "\n");
-	printf("%s: %s\n", IP_Address, port);
+	port = strtok(NULL, "\n");	
 	struct addrinfo hints;
 	struct addrinfo *res;
 	memset(&hints, 0, sizeof(hints));
@@ -162,9 +172,12 @@ int establishDataConnection(int controlSock)
 	}
 	
     freeaddrinfo(res);
+	printf("Data connection established\n");
 	return dataSocket;
 }
 
+//Lists all files/directories in the current directory
+//code modified from post located at: https://stackoverflow.com/questions/4204666/how-to-list-files-in-a-directory-in-a-c-program
 void listDirectories(int dataSocket)
 {
 	DIR *dp;
@@ -184,32 +197,115 @@ void listDirectories(int dataSocket)
 		}
 		closedir(dp);		
 	}
+	printf("Directory list sent to client, closing data socket...\n");
 	sendAll(dataSocket, directories);
 	free(directories);	
 	directories = NULL;
+	close(dataSocket);
 }	
 
+//Sends the file to the client
+void sendFileToClient(int found, int controlSock, int dataSocket, char* fileName)
+{
+	char* fileExists = malloc(sizeof(char) * 20);
+	memset(fileExists, 0, sizeof(char) * 20);
+	printf("Sending file...\n");
+	
+	if (found == 0)
+	{				
+		strcpy(fileExists, "ok");
+		sendAll(dataSocket, fileExists);
+		FILE* fp;
+		char* fileChunk = malloc(sizeof(char) * 1024);
+		memset(fileChunk, 0, sizeof(char) * 1024);
+		char* finishedTransmitting = malloc(sizeof(char) * 15);
+		memset(finishedTransmitting, 0, sizeof(char) * 15);
+		strcpy(finishedTransmitting, "__OVER__");	
+		fp = fopen(fileName, "r");
+		
+		while((fgets(fileChunk, sizeof(char) * 1023, fp)) != NULL)
+		{
+			sendAll(dataSocket, fileChunk);			
+			memset(fileChunk, 0, sizeof(char) * 1024);
+		}
+		
+		sendAll(dataSocket, finishedTransmitting);
+		free(fileChunk);
+		fileChunk = NULL;
+		free(finishedTransmitting);
+		finishedTransmitting = NULL;
+		fclose(fp);		
+	}
+	else
+	{
+		strcpy(fileExists, "File not found");
+		sendAll(dataSocket, fileExists);
+	}
+	
+	free(fileExists);
+	fileExists = NULL;
+	printf("File sent! Closing data socket...\n");
+	close(dataSocket);
+}
+
+//determines whether the file name exists in the current directory of the server
+void findFile(int controlSock, int dataSocket)
+{
+    int found = 1;
+    char* fileName = malloc(sizeof(char) * 100);
+    memset(fileName, 0, sizeof(char) * 100);
+    fileName = recvAll(controlSock);	
+    
+	DIR *dp;
+	struct dirent* ep;
+	
+	dp = opendir(".");
+	if (dp)
+	{
+		while ((ep = readdir(dp)) != NULL)
+		{
+			if(ep->d_type == DT_REG)
+			{
+				if(strcmp(ep->d_name, fileName) == 0)
+				{
+				    found = 0;
+				}
+			}
+		}
+		closedir(dp);		
+	}
+	sendFileToClient(found, controlSock, dataSocket, fileName);
+}
+
+
+		
+//receives a command from the python client and determines what to do
 void handleRequest(int controlSock)
 {
 	int dataSocket;
 	char* command;	
-	command = recvAll(controlSock);	
-	printf("Command: %s\n", command);
+	command = recvAll(controlSock);		
+	
 	if(strcmp(command, "-l") != 0 && strcmp(command, "-g") != 0)
 	{
-		char* invalid = malloc(sizeof(char) * 30);
-		strcpy(invalid, "Command is not recognized...");
+		char* invalid = malloc(sizeof(char) * 30);		
 		sendAll(controlSock, invalid);
 		printf("%s\n", invalid);
 		free(invalid);
 	}
 	else if (strcmp(command, "-l") == 0)
 	{
-		
 		dataSocket = establishDataConnection(controlSock);
 		listDirectories(dataSocket);
 		close(dataSocket);
 	}
+	else
+	{
+	    dataSocket = establishDataConnection(controlSock);
+		findFile(controlSock, dataSocket);
+		close(dataSocket);
+	}
+	
 	memset(command, 0, strlen(command));
 	free(command);
 	command = NULL;
@@ -234,6 +330,7 @@ int main(int argc, char* argv[])
 		controlSock = acceptConnection(listeningSock);
 		handleRequest(controlSock);
 		close(controlSock);
+		printf("Control connection closed, waiting on new connection...\n");
 	}
 	
     return 0;

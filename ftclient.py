@@ -1,4 +1,8 @@
 #!/usr/bin/python
+
+#Lane Bryer - CS 372 Project 2
+#ftclient.py
+
 from socket import *
 import sys
 import time
@@ -29,17 +33,41 @@ def recvMsg(socket):
 
 #sends the command argument to the C server    
 def sendCommand(controlSock, command, portno):
-    print command
     sendMsg(controlSock, command)
     if (command != "-l" and command != "-g"):
         result = recvMsg(controlSock)
         print result
     else:   
-        connectedDataSocket = establishDataConnection(controlSock, portno)
         if (command == "-l"):
+            connectedDataSocket = establishDataConnection(controlSock, portno)
             receiveDirectory(connectedDataSocket)
-            
+        if (command == "-g"):
+            getFileStatus(controlSock)
 
+#determines whether the server has the requested file or not            
+def getFileStatus(controlSock):
+    connectedDataSocket = establishDataConnection(controlSock, portno)
+    fileName = sys.argv[4]
+    sendMsg(controlSock, fileName)
+    fileExists = recvMsg(connectedDataSocket)
+    if(fileExists == "ok"):
+        receiveFile(connectedDataSocket, fileName)
+        connectedDataSocket.close()
+    else:
+        print "File not found"
+        connectedDataSocket.close()
+
+#actual receipt of file data if the file exists        
+def receiveFile(connectedDataSocket, fileName):
+    file = open(fileName, "w")
+    chunk = recvMsg(connectedDataSocket)    
+    while ("__OVER__" not in chunk):
+        file.write(chunk)       
+        chunk = recvMsg(connectedDataSocket)
+    chunk = chunk.replace("__OVER__", "")
+    file.write(chunk)
+    file.close()
+    print "File done transmitting!"
     
 
 #Gets the list of files in the current directory from the C server
@@ -59,7 +87,7 @@ def establishDataConnection(controlSock, portno):
     connectedDataSocket, addr = dataSocket.accept()
     return connectedDataSocket
 
-#gets my own IP address
+#gets my own IP address - found at https://stackoverflow.com/questions/166506/finding-local-ip-addresses-using-pythons-stdlib
 def getIPAddress():
     s = socket(AF_INET, SOCK_DGRAM)
     s.connect(("8.8.8.8", 80))
@@ -78,6 +106,7 @@ if __name__ == "__main__":
         
     controlSock = controlSocketSetup()
     sendCommand(controlSock, sys.argv[3], portno)
+    controlSock.close()
     
     
         
